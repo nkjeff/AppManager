@@ -50,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,7 +114,8 @@ private fun AppManagerScreen() {
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
     var whitelist by remember { mutableStateOf(loadSet(context, "whitelist")) }
     var pinned by remember { mutableStateOf(loadSet(context, "pinned")) }
-    var selectedInitial by remember { mutableStateOf("全部") }
+    var selectedInitial by remember { mutableStateOf("") }
+    var refreshVersion by remember { mutableStateOf(0) }
     var touchedPackage by remember { mutableStateOf("") }
     var hasUsage by remember { mutableStateOf(hasUsageAccess(context)) }
     var shizukuGranted by remember { mutableStateOf(Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) }
@@ -122,7 +124,8 @@ private fun AppManagerScreen() {
         hasUsage = hasUsageAccess(context)
         shizukuGranted = Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         apps = loadApps(context, shizukuGranted, hasUsage)
-        selectedInitial = "全部"
+        selectedInitial = ""
+        refreshVersion += 1
     }
 
     LaunchedEffect(Unit) {
@@ -138,7 +141,7 @@ private fun AppManagerScreen() {
     val leftApps = apps.sortedWith(compareByDescending<AppEntry> { it.launchCount }.thenBy { it.label.lowercase(Locale.ROOT) })
     val centerApps = apps.filter { it.running }
     val rightApps = apps.filter { it.key in pinned }
-        .filter { selectedInitial == "全部" || pinyinInitial(it.label) == selectedInitial }
+        .filter { selectedInitial.isBlank() || pinyinInitial(it.label) == selectedInitial }
         .sortedBy { it.label.lowercase(Locale.ROOT) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = OLED_BLACK) {
@@ -172,6 +175,7 @@ private fun AppManagerScreen() {
                 ) { Text("一键停用", fontSize = 14.sp) }
             }
 
+            key(refreshVersion) {
             Row(modifier = Modifier.fillMaxSize()) {
                 AppColumn(
                     modifier = Modifier.weight(1f),
@@ -217,6 +221,7 @@ private fun AppManagerScreen() {
                         onSelect = { selectedInitial = it }
                     )
                 }
+            }
             }
             Text(
                 text = touchedPackage,
