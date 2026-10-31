@@ -1,6 +1,5 @@
 package com.nkjeff.appmanager
 
-import android.app.Activity
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -14,13 +13,12 @@ import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.os.Process as AndroidProcess
 import android.provider.Settings
-import android.text.TextUtils
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -39,11 +37,10 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,10 +48,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -63,26 +61,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
+import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.util.Locale
 import android.icu.text.Transliterator
 
 private const val SHIZUKU_REQUEST = 4102
-private val OLED_BLACK = Color.Black
-private val SOFT_BLUE = Color(0xFF83B9F5)
-private val DIM_WHITE = Color(0xFFEDEDED)
+private val BLACK = Color.Black
+private val WHITE = Color.White
 
 data class AppEntry(
     val packageName: String,
     val label: String,
     val userId: Int,
-    val slot: Int,
     val launchCount: Int,
     val running: Boolean,
+    val enabled: Boolean,
     val icon: Bitmap?
 ) {
     val key: String get() = "$userId:$packageName"
@@ -90,12 +86,8 @@ data class AppEntry(
 
 class MainActivity : ComponentActivity() {
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        if (requestCode == SHIZUKU_REQUEST) {
-            if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                ShizukuShell.bind(this) { runOnUiThread { recreate() } }
-            } else {
-                recreate()
-            }
+        if (requestCode == SHIZUKU_REQUEST && grantResult == PackageManager.PERMISSION_GRANTED) {
+            ShizukuShell.bind(this) { runOnUiThread { recreate() } }
         }
     }
 
@@ -108,7 +100,7 @@ class MainActivity : ComponentActivity() {
         if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
             ShizukuShell.bind(this) { runOnUiThread { recreate() } }
         }
-        setContent { AppManagerScreen() }
+        setContent { AbbScreen() }
     }
 
     override fun onDestroy() {
@@ -119,28 +111,67 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppManagerScreen() {
+private fun AbbScreen() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val leftState = rememberLazyListState()
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
     var whitelist by remember { mutableStateOf(loadSet(context, "whitelist")) }
-    var pinned by remember { mutableStateOf(loadSet(context, "pinned")) }
     var selectedInitial by remember { mutableStateOf("") }
-    var refreshVersion by remember { mutableStateOf(0) }
-    var touchedPackage by remember { mutableStateOf("") }
-    var hasUsage by remember { mutableStateOf(hasUsageAccess(context)) }
-    var shizukuGranted by remember { mutableStateOf(Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) }
+    var packagePreview by remember { mutableStateOf("") }
+    var usageAllowed by remember { mutableStateOf(hasUsageAccess(context)) }
+    var shizukuGranted by remember {
+        mutableStateOf(Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED)
+    }
+    var refreshToken by remember { mutableStateOf(0) }
 
     fun refresh() {
-        hasUsage = hasUsageAccess(context)
-        shizukuGranted = Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-        apps = loadApps(context, shizukuGranted, hasUsage)
-        selectedInitial = ""
-        refreshVersion += 1
+        usageAllowed = hasUsageAccess(context)
+        shizukuGranted = Shizuku.pingBinder() &&
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        apps = loadApps(context, shizukuGranted, usageAllowed)
+        refreshToken++
+    }
+
+    fun toggleWhitelist(entry: AppEntry) {
+        whitelist = whitelist.toMutableSet().also {
+            if (!it.add(entry.key)) it.remove(entry.key)
+        }
+        saveSet(context, "whitelist", whitelist)
+    }
+
+    fun freeze(entry: AppEntry) {
+        if (!ensureShizuku()) return
+        runShell("pm disable-user --user ${entry.userId} ${entry.packageName}")
+        refresh()
+    }
+
+    fun unfreezeAndLaunch(entry: AppEntry) {
+        if (ensureShizuku()) {
+            runShell("pm enable --user ${entry.userId} ${entry.packageName}")
+            val intent = context.packageManager.getLaunchIntentForPackage(entry.packageName)
+            if (intent != null) {
+                val component = intent.component?.flattenToString()
+                if (component != null) {
+                    runShell("am start --user ${entry.userId} -n $component")
+                } else if (entry.userId == 0) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            }
+        } else if (entry.userId == 0) {
+            val intent = context.packageManager.getLaunchIntentForPackage(entry.packageName)
+            intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (intent != null) context.startActivity(intent)
+        }
+        refresh()
     }
 
     LaunchedEffect(Unit) {
-        if (!hasUsage) {
-            try { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+        if (!usageAllowed) {
+            try {
+                context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Exception) { }
         }
         if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             Shizuku.requestPermission(SHIZUKU_REQUEST)
@@ -148,157 +179,155 @@ private fun AppManagerScreen() {
         refresh()
     }
 
-    val leftApps = apps.sortedWith(compareByDescending<AppEntry> { it.launchCount }.thenBy { it.label.lowercase(Locale.ROOT) })
-    val centerApps = apps.filter { it.running }
-    val rightApps = apps.filter { it.key in pinned }
+    val leftApps = apps
         .filter { selectedInitial.isBlank() || pinyinInitial(it.label) == selectedInitial }
-        .sortedBy { it.label.lowercase(Locale.ROOT) }
+        .sortedWith(compareByDescending<AppEntry> { it.launchCount }.thenBy { it.label.lowercase(Locale.ROOT) })
+    val rightApps = apps.filter { it.running }.sortedBy { it.label.lowercase(Locale.ROOT) }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = OLED_BLACK) {
-        Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).background(OLED_BLACK)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+    Surface(modifier = Modifier.fillMaxSize(), color = BLACK) {
+        Column(
+            modifier = Modifier.fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .background(BLACK)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().weight(0.085f),
+                contentAlignment = Alignment.Center
             ) {
-                Button(
-                    onClick = { refresh() },
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF171717), contentColor = DIM_WHITE)
-                ) { Text("刷新", fontSize = 14.sp) }
-                Button(
-                    onClick = {
-                        if (!Shizuku.pingBinder()) return@Button
-                        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-                            Shizuku.requestPermission(SHIZUKU_REQUEST)
-                            return@Button
-                        }
-                        val targets = centerApps.filter { it.key !in whitelist && it.packageName != context.packageName }
-                        targets.forEach { entry ->
-                            runShell("pm disable-user --user ${entry.userId} ${entry.packageName}")
-                        }
-                        refresh()
-                    },
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF202A35), contentColor = SOFT_BLUE)
-                ) { Text("一键停用", fontSize = 14.sp) }
+                Text(
+                    text = packagePreview,
+                    color = WHITE,
+                    fontSize = 8.sp,
+                    maxLines = 1,
+                    textAlign = TextAlign.Center
+                )
             }
 
-            key(refreshVersion) {
-            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                AppColumn(
-                    modifier = Modifier.weight(1f),
-                    entries = leftApps,
-                    whitelist = whitelist,
-                    pinned = pinned,
-                    onTouch = { touchedPackage = it.packageName },
-                    onLaunch = { launchApp(context, it) },
-                    onLongPress = {}
-                )
-                AppColumn(
-                    modifier = Modifier.weight(1f),
-                    entries = centerApps,
-                    whitelist = whitelist,
-                    pinned = pinned,
-                    onTouch = { touchedPackage = it.packageName },
-                    onLaunch = { launchApp(context, it) },
-                    onLongPress = { entry ->
-                        whitelist = whitelist.toMutableSet().also {
-                            if (!it.add(entry.key)) it.remove(entry.key)
-                        }
-                        saveSet(context, "whitelist", whitelist)
+            key(refreshToken) {
+                Box(modifier = Modifier.fillMaxWidth().weight(0.83f)) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        AppListColumn(
+                            modifier = Modifier.weight(1f).fillMaxSize(),
+                            entries = leftApps,
+                            listState = leftState,
+                            whitelist = whitelist,
+                            onTouch = { packagePreview = it.packageName },
+                            onClick = { unfreezeAndLaunch(it) },
+                            onLongClick = { toggleWhitelist(it) }
+                        )
+                        AppListColumn(
+                            modifier = Modifier.weight(1f).fillMaxSize(),
+                            entries = rightApps,
+                            listState = rememberLazyListState(),
+                            whitelist = whitelist,
+                            onTouch = { packagePreview = it.packageName },
+                            onClick = { unfreezeAndLaunch(it) },
+                            onLongClick = { freeze(it) }
+                        )
                     }
-                )
-                Box(modifier = Modifier.weight(1f).fillMaxSize()) {
-                    AppColumn(
-                        modifier = Modifier.fillMaxSize().padding(start = 17.dp),
-                        entries = rightApps,
-                        whitelist = whitelist,
-                        pinned = pinned,
-                        onTouch = { touchedPackage = it.packageName },
-                        onLaunch = { launchApp(context, it) },
-                        onLongPress = { entry ->
-                            pinned = pinned.toMutableSet().also {
-                                if (!it.add(entry.key)) it.remove(entry.key)
-                            }
-                            saveSet(context, "pinned", pinned)
-                        }
-                    )
                     AlphabetRail(
-                        modifier = Modifier.align(Alignment.CenterStart),
+                        modifier = Modifier.align(Alignment.Center).zIndex(2f),
                         selected = selectedInitial,
-                        onSelect = { selectedInitial = it }
+                        onSelect = { selectedInitial = it },
+                        onReset = {
+                            selectedInitial = ""
+                            scope.launch { leftState.animateScrollToItem(0) }
+                        }
                     )
                 }
             }
+
+            Box(
+                modifier = Modifier.fillMaxWidth().weight(0.085f),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxWidth(0.94f)
+                        .height(42.dp)
+                        .border(1.dp, WHITE, RoundedCornerShape(2.dp))
+                        .combinedClickable(
+                            onClick = {
+                                if (!ensureShizuku()) return@combinedClickable
+                                rightApps.filter {
+                                    it.key !in whitelist && it.packageName != context.packageName
+                                }.forEach { entry ->
+                                    runShell("pm disable-user --user ${entry.userId} ${entry.packageName}")
+                                }
+                                refresh()
+                            },
+                            onLongClick = { }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("停用", color = WHITE, fontSize = 13.sp)
+                }
             }
-            Text(
-                text = touchedPackage,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 1.dp, top = 2.dp),
-                color = Color.White,
-                fontSize = 9.sp,
-                textAlign = TextAlign.Center,
-                maxLines = 1
-            )
         }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppColumn(
+private fun AppListColumn(
     modifier: Modifier,
     entries: List<AppEntry>,
+    listState: LazyListState,
     whitelist: Set<String>,
-    pinned: Set<String>,
     onTouch: (AppEntry) -> Unit,
-    onLaunch: (AppEntry) -> Unit,
-    onLongPress: (AppEntry) -> Unit
+    onClick: (AppEntry) -> Unit,
+    onLongClick: (AppEntry) -> Unit
 ) {
-    LazyColumn(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    LazyColumn(
+        modifier = modifier,
+        state = listState,
+        horizontalAlignment = Alignment.Start
+    ) {
         items(entries, key = { it.key }) { entry ->
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 1.dp, vertical = 5.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (entry.key in whitelist || entry.key in pinned) Color(0xFF101820) else OLED_BLACK)
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .padding(horizontal = 3.dp, vertical = 5.dp)
+                    .combinedClickable(
+                        onClick = { onClick(entry) },
+                        onLongClick = { onLongClick(entry) }
+                    )
                     .pointerInput(entry.key) {
                         awaitEachGesture {
                             awaitFirstDown()
                             onTouch(entry)
                         }
                     }
-                    .combinedClickable(
-                        onClick = { onLaunch(entry) },
-                        onLongClick = { onLongPress(entry) }
-                    )
-                    .padding(vertical = 3.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start
             ) {
+                if (entry.key in whitelist) {
+                    Text(
+                        text = "☆",
+                        color = WHITE,
+                        fontSize = 12.sp,
+                        modifier = Modifier.width(15.dp),
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    Spacer(modifier = Modifier.width(15.dp))
+                }
                 if (entry.icon != null) {
                     Image(
                         bitmap = entry.icon.asImageBitmap(),
                         contentDescription = entry.label,
-                        modifier = Modifier.size(52.dp)
+                        modifier = Modifier.size(29.dp).alpha(if (entry.enabled) 1f else 0.5f)
                     )
                 } else {
-                    Spacer(Modifier.size(52.dp))
+                    Spacer(modifier = Modifier.size(29.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text(
-                        text = entry.label,
-                        color = DIM_WHITE,
-                        fontSize = 10.sp,
-                        lineHeight = 12.sp,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2
-                    )
-                    if (entry.slot in 0..5) {
-                        Text(" ${entry.slot}", color = SOFT_BLUE, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                Text(
+                    text = entry.label,
+                    color = WHITE,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f).padding(start = 5.dp)
+                )
             }
         }
     }
@@ -306,23 +335,32 @@ private fun AppColumn(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AlphabetRail(modifier: Modifier, selected: String, onSelect: (String) -> Unit) {
+private fun AlphabetRail(
+    modifier: Modifier,
+    selected: String,
+    onSelect: (String) -> Unit,
+    onReset: () -> Unit
+) {
     val letters = ('A'..'Z').map { it.toString() } + "#"
     LazyColumn(
-        modifier = modifier.width(17.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF090D12)),
+        modifier = modifier.width(16.dp)
+            .background(BLACK)
+            .padding(vertical = 1.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         items(letters) { letter ->
             Text(
                 text = letter,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp)
-                    .combinedClickable(onClick = { onSelect(letter) }, onLongClick = {}),
-                color = if (selected == letter) SOFT_BLUE else Color(0xFFB8B8B8),
-                fontSize = 11.sp,
-                textAlign = TextAlign.Center,
-                fontWeight = if (selected == letter) FontWeight.Bold else FontWeight.Normal
+                modifier = Modifier.fillMaxWidth()
+                    .combinedClickable(
+                        onClick = { onSelect(letter) },
+                        onLongClick = { onReset() }
+                    )
+                    .padding(vertical = 2.dp),
+                color = if (selected == letter) WHITE else Color(0xFFBDBDBD),
+                fontSize = 10.sp,
+                fontWeight = if (selected == letter) FontWeight.Bold else FontWeight.Normal,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -333,27 +371,40 @@ private fun loadApps(context: Context, canShell: Boolean, usageAllowed: Boolean)
     val users = if (canShell) listUsers() else listOf(0)
     val running = if (canShell) runningPackages() else emptySet()
     val counts = if (usageAllowed) launchCounts(context) else emptyMap()
-    val own = context.packageName
+    val ownPackage = context.packageName
+    val installedForCurrentUser = try {
+        pm.getInstalledApplications(PackageManager.GET_META_DATA or PackageManager.MATCH_DISABLED_COMPONENTS)
+            .filter {
+                (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 &&
+                    it.packageName != ownPackage
+            }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
     val result = mutableListOf<AppEntry>()
-
-    users.take(6).forEachIndexed { slot, userId ->
-        val packages = if (canShell && userId != 0) listPackagesForUser(userId) else null
-        val installed = try {
-            pm.getInstalledApplications(PackageManager.GET_META_DATA or PackageManager.MATCH_DISABLED_COMPONENTS)
-                .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 && it.packageName != own }
-        } catch (_: Exception) { emptyList() }
-
-        installed.forEach { info ->
-            if (packages != null && info.packageName !in packages) return@forEach
-            val label = try { pm.getApplicationLabel(info).toString() } catch (_: Exception) { info.packageName }
-            val icon = try { drawableBitmap(info.loadIcon(pm)) } catch (_: Exception) { null }
+    users.take(7).forEach { userId ->
+        val packagesForUser = if (canShell) listPackagesForUser(userId) else null
+        val disabledForUser = if (canShell) disabledPackagesForUser(userId) else emptySet()
+        installedForCurrentUser.forEach { info ->
+            if (packagesForUser != null && info.packageName !in packagesForUser) return@forEach
+            val label = try {
+                pm.getApplicationLabel(info).toString()
+            } catch (_: Exception) {
+                info.packageName
+            }
+            val icon = try {
+                drawableBitmap(info.loadIcon(pm))
+            } catch (_: Exception) {
+                null
+            }
             result += AppEntry(
                 packageName = info.packageName,
                 label = label,
                 userId = userId,
-                slot = slot,
                 launchCount = counts[info.packageName] ?: 0,
                 running = "$userId:${info.packageName}" in running,
+                enabled = info.packageName !in disabledForUser,
                 icon = icon
             )
         }
@@ -369,7 +420,9 @@ private fun launchCounts(context: Context): Map<String, Int> {
     val counts = mutableMapOf<String, Int>()
     while (events.hasNextEvent()) {
         events.getNextEvent(event)
-        if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED || event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+        if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
+            event.eventType == UsageEvents.Event.ACTIVITY_RESUMED
+        ) {
             counts[event.packageName] = (counts[event.packageName] ?: 0) + 1
         }
     }
@@ -380,19 +433,36 @@ private fun hasUsageAccess(context: Context): Boolean {
     val ops = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
     return try {
         @Suppress("DEPRECATION")
-        ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, AndroidProcess.myUid(), context.packageName) == AppOpsManager.MODE_ALLOWED
-    } catch (_: Exception) { false }
+        ops.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            AndroidProcess.myUid(),
+            context.packageName
+        ) == AppOpsManager.MODE_ALLOWED
+    } catch (_: Exception) {
+        false
+    }
 }
 
 private fun listUsers(): List<Int> {
     val output = runShell("pm list users")
-    val ids = Regex("UserInfo\\{(\\d+):").findAll(output).mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }.toList()
-    return (listOf(0) + ids).distinct().take(6)
+    val ids = Regex("UserInfo\\{(\\d+):").findAll(output)
+        .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+        .toList()
+    return (listOf(0) + ids).distinct()
 }
 
 private fun listPackagesForUser(userId: Int): Set<String> {
-    return Regex("package:([^\\s]+)").findAll(runShell("pm list packages --user $userId"))
-        .map { it.groupValues[1] }.toSet()
+    return Regex("package:([^\\s]+)")
+        .findAll(runShell("pm list packages --user $userId"))
+        .map { it.groupValues[1] }
+        .toSet()
+}
+
+private fun disabledPackagesForUser(userId: Int): Set<String> {
+    return Regex("package:([^\\s]+)")
+        .findAll(runShell("pm list packages -d --user $userId"))
+        .map { it.groupValues[1] }
+        .toSet()
 }
 
 private fun runningPackages(): Set<String> {
@@ -401,10 +471,24 @@ private fun runningPackages(): Set<String> {
         val parts = line.trim().split(Regex("\\s+"))
         if (parts.size < 2) return@mapNotNull null
         val userId = Regex("^u(\\d+)_").find(parts[0])?.groupValues?.get(1)?.toIntOrNull()
-            ?: parts[0].toIntOrNull()?.div(100000) ?: 0
+            ?: parts[0].toIntOrNull()?.div(100000)
+            ?: 0
         val processName = parts.last().substringBefore(':')
-        if (processName.contains('.') && !processName.startsWith("android.")) "$userId:$processName" else null
+        if (processName.contains('.') && !processName.startsWith("android.")) {
+            "$userId:$processName"
+        } else {
+            null
+        }
     }.toSet()
+}
+
+private fun ensureShizuku(): Boolean {
+    if (!Shizuku.pingBinder()) return false
+    if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+        Shizuku.requestPermission(SHIZUKU_REQUEST)
+        return false
+    }
+    return true
 }
 
 private fun runShell(command: String): String = ShizukuShell.runCommand(command)
@@ -413,8 +497,8 @@ private fun pinyinInitial(label: String): String {
     if (label.isBlank()) return "#"
     val first = label.trim().first()
     if (first.isDigit()) {
-        val digit = listOf("LING", "YI", "ER", "SAN", "SI", "WU", "LIU", "QI", "BA", "JIU")[first.digitToInt()]
-        return digit.first().toString()
+        val pinyin = listOf("LING", "YI", "ER", "SAN", "SI", "WU", "LIU", "QI", "BA", "JIU")[first.digitToInt()]
+        return pinyin.first().toString()
     }
     return try {
         val transliterator = Transliterator.getInstance("Han-Latin; Latin-ASCII")
@@ -435,22 +519,11 @@ private fun drawableBitmap(drawable: Drawable): Bitmap {
     return bitmap
 }
 
-private fun launchApp(context: Context, entry: AppEntry) {
-    try {
-        val intent = context.packageManager.getLaunchIntentForPackage(entry.packageName) ?: return
-        if (entry.userId != 0 && Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            val component = intent.component?.flattenToString() ?: return
-            runShell("am start --user ${entry.userId} -n $component")
-        } else {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-        }
-    } catch (_: Exception) {}
-}
-
 private fun loadSet(context: Context, key: String): Set<String> =
-    context.getSharedPreferences("app_manager", Context.MODE_PRIVATE).getStringSet(key, emptySet())?.toSet() ?: emptySet()
+    context.getSharedPreferences("abb", Context.MODE_PRIVATE)
+        .getStringSet(key, emptySet())?.toSet() ?: emptySet()
 
 private fun saveSet(context: Context, key: String, value: Set<String>) {
-    context.getSharedPreferences("app_manager", Context.MODE_PRIVATE).edit().putStringSet(key, value.toSet()).apply()
+    context.getSharedPreferences("abb", Context.MODE_PRIVATE)
+        .edit().putStringSet(key, value.toSet()).apply()
 }
