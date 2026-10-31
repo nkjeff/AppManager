@@ -296,14 +296,14 @@ private fun AppColumn(
 
 @Composable
 private fun AlphabetRail(modifier: Modifier, selected: String, onSelect: (String) -> Unit) {
-    val letters = listOf("全部") + ('A'..'Z').map { it.toString() } + "#"
+    val letters = ('A'..'Z').map { it.toString() } + "#"
     LazyColumn(
         modifier = modifier.width(17.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF090D12)),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         items(letters) { letter ->
             Text(
-                text = if (letter == "全部") "全" else letter,
+                text = letter,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 2.dp)
