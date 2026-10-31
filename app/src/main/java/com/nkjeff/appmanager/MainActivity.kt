@@ -406,14 +406,7 @@ private fun runningPackages(): Set<String> {
     }.toSet()
 }
 
-private fun runShell(command: String): String {
-    return try {
-        val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-        val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
-        process.waitFor()
-        output
-    } catch (_: Exception) { "" }
-}
+private fun runShell(command: String): String = ShizukuShell.runCommand(command)
 
 private fun pinyinInitial(label: String): String {
     if (label.isBlank()) return "#"
