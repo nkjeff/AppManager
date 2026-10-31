@@ -89,7 +89,13 @@ data class AppEntry(
 
 class MainActivity : ComponentActivity() {
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        if (requestCode == SHIZUKU_REQUEST) recreate()
+        if (requestCode == SHIZUKU_REQUEST) {
+            if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                ShizukuShell.bind(this) { runOnUiThread { recreate() } }
+            } else {
+                recreate()
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,6 +104,9 @@ class MainActivity : ComponentActivity() {
         window.navigationBarColor = android.graphics.Color.BLACK
         WindowCompat.setDecorFitsSystemWindows(window, true)
         Shizuku.addRequestPermissionResultListener(permissionListener)
+        if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            ShizukuShell.bind(this) { runOnUiThread { recreate() } }
+        }
         setContent { AppManagerScreen() }
     }
 
@@ -294,6 +303,7 @@ private fun AppColumn(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlphabetRail(modifier: Modifier, selected: String, onSelect: (String) -> Unit) {
     val letters = ('A'..'Z').map { it.toString() } + "#"
