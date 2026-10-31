@@ -280,7 +280,7 @@ private fun AppColumn(
                         textAlign = TextAlign.Center,
                         maxLines = 2
                     )
-                    if (entry.slot in 0..5 && entry.userId != 0) {
+                    if (entry.slot in 0..5) {
                         Text(" ${entry.slot}", color = SOFT_BLUE, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                     }
                 }
@@ -330,7 +330,7 @@ private fun loadApps(context: Context, canShell: Boolean, usageAllowed: Boolean)
         installed.forEach { info ->
             if (packages != null && info.packageName !in packages) return@forEach
             val label = try { pm.getApplicationLabel(info).toString() } catch (_: Exception) { info.packageName }
-            val icon = try { drawableBitmap(pm.getApplicationIcon(info.loadIcon(pm))) } catch (_: Exception) { null }
+            val icon = try { drawableBitmap(info.loadIcon(pm)) } catch (_: Exception) { null }
             result += AppEntry(
                 packageName = info.packageName,
                 label = label,
