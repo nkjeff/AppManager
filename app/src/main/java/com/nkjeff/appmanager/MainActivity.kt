@@ -342,7 +342,7 @@ private fun loadApps(context: Context, canShell: Boolean, usageAllowed: Boolean)
                 userId = userId,
                 slot = slot,
                 launchCount = counts[info.packageName] ?: 0,
-                running = running.any { it == info.packageName || it.startsWith(info.packageName + ":") },
+                running = "$userId:${info.packageName}" in running,
                 icon = icon
             )
         }
@@ -385,10 +385,15 @@ private fun listPackagesForUser(userId: Int): Set<String> {
 }
 
 private fun runningPackages(): Set<String> {
-    val output = runShell("ps -A -o NAME")
-    return output.lineSequence().map { it.trim().substringBefore(':') }
-        .filter { it.contains('.') && !it.startsWith("android.") }
-        .toSet()
+    val output = runShell("ps -A -o USER,NAME")
+    return output.lineSequence().drop(1).mapNotNull { line ->
+        val parts = line.trim().split(Regex("\\s+"))
+        if (parts.size < 2) return@mapNotNull null
+        val userId = Regex("^u(\\d+)_").find(parts[0])?.groupValues?.get(1)?.toIntOrNull()
+            ?: parts[0].toIntOrNull()?.div(100000) ?: 0
+        val processName = parts.last().substringBefore(':')
+        if (processName.contains('.') && !processName.startsWith("android.")) "$userId:$processName" else null
+    }.toSet()
 }
 
 private fun runShell(command: String): String {
