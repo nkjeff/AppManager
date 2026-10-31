@@ -339,7 +339,7 @@ private fun loadApps(context: Context, canShell: Boolean, usageAllowed: Boolean)
     users.take(6).forEachIndexed { slot, userId ->
         val packages = if (canShell && userId != 0) listPackagesForUser(userId) else null
         val installed = try {
-            pm.getInstalledApplications(PackageManager.GET_META_DATA)
+            pm.getInstalledApplications(PackageManager.GET_META_DATA or PackageManager.MATCH_DISABLED_COMPONENTS)
                 .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 && it.packageName != own }
         } catch (_: Exception) { emptyList() }
 
