@@ -429,8 +429,13 @@ private fun drawableBitmap(drawable: Drawable): Bitmap {
 private fun launchApp(context: Context, entry: AppEntry) {
     try {
         val intent = context.packageManager.getLaunchIntentForPackage(entry.packageName) ?: return
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        if (entry.userId != 0 && Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            val component = intent.component?.flattenToString() ?: return
+            runShell("am start --user ${entry.userId} -n $component")
+        } else {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }
     } catch (_: Exception) {}
 }
 
