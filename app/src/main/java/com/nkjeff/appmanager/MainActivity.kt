@@ -35,7 +35,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -154,7 +155,7 @@ private fun AppManagerScreen() {
         .sortedBy { it.label.lowercase(Locale.ROOT) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = OLED_BLACK) {
-        Column(modifier = Modifier.fillMaxSize().background(OLED_BLACK)) {
+        Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).background(OLED_BLACK)) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -185,7 +186,7 @@ private fun AppManagerScreen() {
             }
 
             key(refreshVersion) {
-            Row(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 AppColumn(
                     modifier = Modifier.weight(1f),
                     entries = leftApps,
